@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>隱藏訊息解碼器 (Anaglyph Reader)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 隱藏預設游標，提供更好的沉浸感 */
+        .cursor-none-custom {
+            cursor: none;
+        }
+        
+        /* 背景網格圖案，讓透明圖片更容易辨識 */
+        .bg-grid {
+            background-color: #f3f4f6;
+            background-image: linear-gradient(45deg, #e5e7eb 25%, transparent 25%), 
+                              linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), 
+                              linear-gradient(45deg, transparent 75%, #e5e7eb 75%), 
+                              linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+        }
+
+        /* 濾波器核心樣式 */
+        #filterLens {
+            /* 讓濾波器中心對準游標 */
+            transform: translate(-50%, -50%);
+            /* 色彩增殖模式是實現濾色片效果的關鍵 */
+            mix-blend-mode: multiply;
+            /* 讓滑鼠事件穿透濾波器，才能持續觸發底層圖片的 mousemove */
+            pointer-events: none;
+            transition: width 0.1s, height 0.1s, background-color 0.1s;
+            box-shadow: inset 0 0 15px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body class="bg-gray-50 flex flex-col h-screen font-sans text-gray-800">
+
+    <!-- 頂部控制面板 -->
+    <header class="bg-white shadow-md z-10 p-4 shrink-0 flex flex-col sm:flex-row gap-4 justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+                隱藏訊息解碼器
+            </h1>
+            <p class="text-sm text-gray-500 mt-1">上傳圖片，將游標移至圖片上即可使用濾波器解碼。</p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-4 bg-gray-100 p-2 sm:p-3 rounded-lg border border-gray-200">
+            <!-- 圖片上傳 -->
+            <div class="flex flex-col">
+                <label for="imageUpload" class="text-xs font-semibold text-gray-600 mb-1">上傳您的圖片</label>
+                <input type="file" id="imageUpload" accept="image/*" class="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer">
+            </div>
+
+            <div class="h-10 w-px bg-gray-300 hidden sm:block"></div>
+
+            <!-- 顏色選擇 -->
+            <div class="flex flex-col items-center">
+                <label for="colorPicker" class="text-xs font-semibold text-gray-600 mb-1">濾鏡顏色</label>
+                <input type="color" id="colorPicker" value="#ff0000" class="w-8 h-8 rounded cursor-pointer border-0 p-0">
+            </div>
+
+            <!-- 大小調整 -->
+            <div class="flex flex-col items-center">
+                <label for="sizeSlider" class="text-xs font-semibold text-gray-600 mb-1">濾鏡大小 (<span id="sizeValue">150</span>px)</label>
+                <input type="range" id="sizeSlider" min="50" max="400" value="150" class="w-24 sm:w-32 cursor-pointer">
+            </div>
+
+            <!-- 透明度調整 -->
+            <div class="flex flex-col items-center">
+                <label for="opacitySlider" class="text-xs font-semibold text-gray-600 mb-1">不透明度</label>
+                <input type="range" id="opacitySlider" min="0.1" max="1" step="0.1" value="1" class="w-24 sm:w-32 cursor-pointer">
+            </div>
+        </div>
+    </header>
+
+    <!-- 主要顯示區域 -->
+    <main class="flex-1 relative bg-grid overflow-auto flex justify-center items-center p-4 sm:p-8">
+        
+        <!-- 圖片與濾波器容器 -->
+        <!-- overflow-hidden 確保濾波器不會超出圖片範圍 -->
+        <div id="imageContainer" class="relative inline-block overflow-hidden shadow-2xl bg-white border border-gray-200 cursor-none-custom select-none hidden">
+            
+            <!-- 顯示的圖片 -->
+            <img id="mainImage" src="" alt="解碼圖片" class="block max-w-full h-auto pointer-events-none" style="max-height: 75vh;">
+            
+            <!-- 跟隨滑鼠的濾波片 -->
+            <div id="filterLens" class="absolute rounded-full hidden" style="width: 150px; height: 150px; background-color: #ff0000;"></div>
+            
+        </div>
+
+        <!-- 初始/無圖片時的提示訊息 -->
+        <div id="emptyState" class="absolute inset-0 flex flex-col items-center justify-center text-gray-500 cursor-pointer hover:bg-gray-200/50 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mb-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <p class="text-lg font-medium">點擊此處，或從上方上傳圖片開始解碼</p>
+        </div>
+
+    </main>
+
+    <!-- 頁尾：作者資訊 -->
+    <footer class="bg-white border-t border-gray-200 py-2 text-center text-sm text-gray-500 shrink-0 z-10 relative">
+        作者：En-Hui & Gemini
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // DOM 元素選取
+            const imageUpload = document.getElementById('imageUpload');
+            const colorPicker = document.getElementById('colorPicker');
+            const sizeSlider = document.getElementById('sizeSlider');
+            const opacitySlider = document.getElementById('opacitySlider');
+            const sizeValue = document.getElementById('sizeValue');
+            const imageContainer = document.getElementById('imageContainer');
+            const mainImage = document.getElementById('mainImage');
+            const filterLens = document.getElementById('filterLens');
+            const emptyState = document.getElementById('emptyState');
+
+            // --- 點擊區域上傳邏輯 ---
+            // 點擊空白提示區域時觸發上傳
+            emptyState.addEventListener('click', () => {
+                imageUpload.click();
+            });
+
+            // --- 濾波器邏輯 ---
+
+            // 更新濾波器位置
+            const updateLensPosition = (clientX, clientY) => {
+                const rect = imageContainer.getBoundingClientRect();
+                // 計算相對於容器內部的座標
+                const x = clientX - rect.left;
+                const y = clientY - rect.top;
+                
+                filterLens.style.left = `${x}px`;
+                filterLens.style.top = `${y}px`;
+            };
+
+            // 滑鼠移動事件
+            imageContainer.addEventListener('mousemove', (e) => {
+                if (!mainImage.src) return;
+                filterLens.style.display = 'block';
+                updateLensPosition(e.clientX, e.clientY);
+            });
+
+            // 滑鼠離開事件
+            imageContainer.addEventListener('mouseleave', () => {
+                filterLens.style.display = 'none';
+            });
+
+            // 觸控螢幕支援
+            imageContainer.addEventListener('touchmove', (e) => {
+                if (!mainImage.src) return;
+                e.preventDefault(); // 防止畫面滾動
+                const touch = e.touches[0];
+                filterLens.style.display = 'block';
+                updateLensPosition(touch.clientX, touch.clientY);
+            }, { passive: false });
+
+            imageContainer.addEventListener('touchend', () => {
+                filterLens.style.display = 'none';
+            });
+
+            // --- 控制項邏輯 ---
+
+            // 更改顏色
+            colorPicker.addEventListener('input', (e) => {
+                updateLensStyle();
+            });
+
+            // 更改大小
+            sizeSlider.addEventListener('input', (e) => {
+                const size = e.target.value;
+                sizeValue.textContent = size;
+                filterLens.style.width = `${size}px`;
+                filterLens.style.height = `${size}px`;
+            });
+
+            // 更改不透明度
+            opacitySlider.addEventListener('input', (e) => {
+                updateLensStyle();
+            });
+
+            // 綜合更新濾波器樣式 (處理 Hex 轉 RGB 以套用透明度)
+            const updateLensStyle = () => {
+                const hexColor = colorPicker.value;
+                const opacity = opacitySlider.value;
+                
+                // 將 Hex 轉換為 RGB
+                const r = parseInt(hexColor.slice(1, 3), 16);
+                const g = parseInt(hexColor.slice(3, 5), 16);
+                const b = parseInt(hexColor.slice(5, 7), 16);
+
+                filterLens.style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${opacity})`;
+            };
+
+            // --- 圖片上傳邏輯 ---
+
+            imageUpload.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        loadImage(event.target.result);
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+
+            // 載入圖片並更新 UI 狀態
+            const loadImage = (src) => {
+                mainImage.src = src;
+                mainImage.onload = () => {
+                    imageContainer.classList.remove('hidden');
+                    emptyState.classList.add('hidden');
+                };
+            };
+
+            // 初始化時設定預設濾鏡樣式
+            updateLensStyle();
+        });
+    </script>
+</body>
+</html>
